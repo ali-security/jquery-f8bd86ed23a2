@@ -2498,3 +2498,92 @@ asyncTest( "Self-closing tags cannot be used to run injected event handlers (CVE
 		start();
 	}, 500 );
 });
+
+// <option> and <optgroup> markup used to be parsed inside a <select multiple> wrapper,
+// which changes how the markup around it is parsed: content that is inert text in
+// regular HTML (and therefore survives sanitizers) could escape into the DOM
+function xssOptionPayloads() {
+	var img = "<img src='data/cve-2020-11023-missing.jpg' " +
+		"onerror='window.jQueryCVE202011023 && window.jQueryCVE202011023()'>";
+
+	return {
+		"option": "<option><style></option></select>" + img + "</style>",
+		"OPTION": "<OPTION><style></OPTION></select>" + img + "</style>",
+		"optgroup": "<optgroup><style></optgroup></select>" + img + "</style>"
+	};
+}
+
+function optionParseMethods() {
+	return {
+		"html()": function( html ) {
+			return jQuery("<div></div>").html( html );
+		},
+		"append()": function( html ) {
+			return jQuery("<div></div>").append( html );
+		},
+		"jQuery()": function( html ) {
+			return jQuery("<div></div>").append( jQuery( html ) );
+		},
+		"jQuery.parseHTML()": function( html ) {
+			return jQuery("<div></div>").append( jQuery.parseHTML( html ) );
+		}
+	};
+}
+
+function nativeInnerHTML( html ) {
+	var div = document.createElement("div");
+	div.innerHTML = html;
+	return div.innerHTML;
+}
+
+// Support: IE<=9
+// Old IE drops <option> tags parsed outside of a select element, so they still need
+// the select wrapper there (jQuery.support.option is false)
+if ( jQuery.support.option ) {
+
+	test( "<option> and <optgroup> do not let markup escape raw text elements (CVE-2020-11023)", 24, function() {
+		jQuery.each( xssOptionPayloads(), function( label, html ) {
+			jQuery.each( optionParseMethods(), function( method, build ) {
+				var $div = build( html );
+
+				equal( $div.find("img").length, 0, method + ", " + label + ": no element is injected" );
+				equal( $div.html(), nativeInnerHTML( html ), method + ", " + label + ": parsed like the browser does" );
+			});
+		});
+	});
+
+	test( "<option> and <optgroup> are not parsed inside a select element (CVE-2020-11023)", 12, function() {
+		var payloads = {
+			"option, input": "<option>a</option><input>",
+			"optgroup, input": "<optgroup label='g'><option>a</option></optgroup><input>",
+			"option, select": "<option>a</option><select><option>b</option></select>"
+		};
+
+		jQuery.each( payloads, function( label, html ) {
+			jQuery.each( optionParseMethods(), function( method, build ) {
+				equal( build( html ).html(), nativeInnerHTML( html ), method + ", " + label + ": parsed like the browser does" );
+			});
+		});
+	});
+
+	asyncTest( "<option> and <optgroup> cannot be used to run injected event handlers (CVE-2020-11023)", 1, function() {
+		var executed = 0;
+
+		Globals.register("jQueryCVE202011023");
+		window.jQueryCVE202011023 = function() {
+			executed++;
+		};
+
+		jQuery.each( xssOptionPayloads(), function( label, html ) {
+			jQuery("<div></div>").html( html );
+			jQuery("<div></div>").append( html );
+			jQuery( html );
+			jQuery.parseHTML( html );
+		});
+
+		setTimeout(function() {
+			strictEqual( executed, 0, "No injected inline event handler was executed" );
+			start();
+		}, 500 );
+	});
+}
